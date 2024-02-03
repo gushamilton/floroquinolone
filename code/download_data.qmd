@@ -1,0 +1,103 @@
+---
+title: "Downloading data"
+format: html
+editor: visual
+---
+
+## Download the data from the openprescribing repository (2/2/24)
+
+```{r}
+pacman::p_load(vroom, tidyverse)
+
+antibacterials <- vroom("https://openprescribing.net/api/1.0/spending_by_sicbl/?code=0501&format=csv")
+antibacterials %>%
+  write_tsv("data/all_antibacterials_primary_care.tsv")
+
+quinolones <- vroom("https://openprescribing.net/api/1.0/spending_by_sicbl/?code=050112&format=csv")
+
+quinolones %>%
+  write_tsv("data/all_quninolones_primary_care.tsv")
+
+cipro <- vroom("https://openprescribing.net/api/1.0/spending_by_sicbl/?code=0501120L0&format=csv") %>%
+  write_tsv("data/cipro_primary_care.tsv")
+
+levo <- vroom("https://openprescribing.net/api/1.0/spending_by_sicbl/?code=0501120X0&format=csv") %>%
+  write_tsv("data/levo_primary_care.tsv")
+
+coamox <- vroom("https://openprescribing.net/api/1.0/spending_by_sicbl/?code=0501013K0&format=csv") %>%
+  write_tsv("data/coamox_primary_care.tsv")
+
+cotrim <- vroom("https://openprescribing.net/api/1.0/spending_by_sicbl/?code=0501080D0&format=csv") %>%
+  write_tsv("data/cotrim_primary_care.tsv")
+
+penicillins <- vroom("https://openprescribing.net/api/1.0/spending_by_sicbl/?code=050101&format=csv") %>%
+  write_tsv("data/peniciillin_primary_care.tsv")
+
+```
+
+Now just get overall prescribing:
+
+Run a function over each BNF code.
+
+```{r}
+num <- sprintf("%02d", 1:15)
+download_bnf <- function(num) {
+vroom(paste0("https://openprescribing.net/api/1.0/spending_by_sicbl/?code=",num,"&format=csv"))
+}
+overall <- map_dfr(num, download_bnf)
+overall <- overall %>%
+  group_by(date, row_name) %>%
+  summarise(items = sum(items), quantity = sum(quantity)) %>%
+  ungroup()
+  
+```
+
+```{r}
+
+df <- bind_rows(
+  overall %>% mutate(product ="Overall"),
+  cipro %>% mutate(product ="Ciprofloxacin"),
+  levo %>% mutate(product ="Levofloxacin"),
+  quinolones %>% mutate(product = "Quinolones"),
+  coamox %>% mutate(product ="Co-amoxiclav"),
+  cotrim %>% mutate(product ="Co-trimoxazole"),
+  antibacterials %>% mutate(product = "Antibacterials"),
+  penicillins %>% mutate(product = "Penicillins")
+)
+
+df %>%
+  write_tsv("data/all_primary_care_prescribing.tsv")
+```
+
+Secondary care - have to access via hospital prescribing (theo sanderson, accessed 2/2/24)
+
+```{r}
+
+files <- list.files("raw/", full.names = T)
+
+import_secondary <- function(x) {
+  
+  name <- gsub('[0-9]+','', basename(x)) %>%
+  str_remove("_Ingredients.tsv") %>%
+  str_remove_all("_") %>%
+  word()
+  vroom(x) %>%
+    mutate(product = name)
+}
+  
+all_secondary_care <- map_dfr(files, import_secondary)
+
+all_secondary_care %>%
+  write_tsv("data/all_secondary_care_prescribing.tsv")
+# all_secondary_care %>%
+#   mutate(product = if_else(product == "Potassium", "Tazobactam", product)) %>%
+#   group_by(year_month, product) %>%
+#   summarise(g = sum(total_usage)) %>%
+#   mutate(date = ymd(paste0(year_month, "01"))) %>%
+#   ungroup() %>%
+#   group_by(product) %>%
+#     mutate(first_val = first(g),
+#          items = g/first_val) %>%
+#   ggplot(aes(x = date, y = items, colour = product)) +
+#   geom_smooth(method = "lm")
+```

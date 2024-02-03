@@ -1,0 +1,498 @@
+---
+title: "Analysis of FQ versus comparators"
+format: html
+editor: visual
+---
+
+## Bring in data
+
+```{r}
+
+pacman::p_load(tidyverse,vroom,patchwork, broom)
+primary_care <- vroom("data/all_primary_care_prescribing.tsv")
+secondary_care <- vroom("data/all_secondary_care_prescribing.tsv")
+bed_utilisation <- read_csv("data/bed_utilisation_2020_2023.csv")
+scale_factor <- secondary_care %>%
+  count(product) %>%
+  mutate(scale = c(15,5,5,5,2,8,5,15,7.5)) %>%
+  select(-n) 
+
+```
+
+```{r}
+
+p1 <- primary_care %>%
+  group_by(product) %>%
+  summarise(items = sum(items)) %>% 
+  mutate(product = fct_reorder(product, -items)) %>%
+  mutate(pop = 56e6) %>%
+  mutate(per_pop =items/pop/(4+11/12) * 1000) %>%
+  filter(product %in% c("Antibacterials", "Amoxicillin", "Clarithromycin", "Ciprofloxacin", "Levofloxacin", "Co-trimoxazole", "Co-amoxiclav")) %>%
+  ggplot(aes(x = product, y = per_pop))+
+  geom_col() +
+  theme_bw() +
+  ylab("Items dispensed/per year/1000 person") +
+  xlab("")
+
+p1
+p2 <- primary_care %>%
+  group_by(date, product) %>%
+    filter(product %in% c("Quinolones")) %>%
+  summarise(items = sum(items)) %>% 
+  group_by(product) %>%
+  # mutate(first_val = first(items),
+  #        items = items/first_val) %>%
+  filter(product != "Overall") %>%
+  ggplot(aes(x = date, y = items, colour = product)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  xlab("") +
+  ylab("Quinolone prescriptions / month") +
+  theme(legend.position = "bottom")
+
+p2
+p3 <- primary_care %>%
+  group_by(date, product) %>%
+      filter(product %in% c("Quinolones", "Clarithromycin", "Co-trimoxazole", "Co-amoxiclav", "Antibacterials")) %>%
+  summarise(items = sum(items)) %>% 
+  group_by(product) %>%
+   # mutate(first_val = first(items),
+   #        items = items/first_val) %>%
+  # filter(product != "Overall") %>%
+  ggplot(aes(x = date, y = items, colour = product)) +
+  geom_point() +
+  geom_smooth() +
+  scale_y_log10() +
+  theme_bw() +
+  ylab("Items/month (log10 scale)") +
+  theme(legend.position = "none") +
+  xlab("")
+p3
+p4 <- primary_care %>%
+  group_by(date, product) %>%
+    filter(product %in% c("Quinolones", "Clarithromycin", "Co-trimoxazole", "Co-amoxiclav", "Antibacterials")) %>%
+  summarise(items = sum(items)) %>% 
+  group_by(product) %>%
+   mutate(first_val = first(items),
+        items = items/first_val) %>%
+  ggplot(aes(x = date, y = items, colour = product)) +
+  geom_point(alpha = 0.3) +
+  geom_smooth(method = "lm") +
+
+  theme_bw() +
+    theme(legend.position = "bottom") +
+  ylab("Scaked change (proportion compared to month 1)") +
+  xlab("") 
+
+
+p_sum <- (p1 + p3) / (p2 + p4)  + plot_annotation(tag_levels = "A")
+ggsave("plots/figure_1.pdf", height = 15, width = 15)
+
+```
+
+Table
+
+```{r}
+primary_care %>%
+  group_by(product) %>%
+  summarise(items = sum(items)) %>% 
+  mutate(product = fct_reorder(product, -items)) %>%
+  mutate(pop = 56e6) %>%
+  mutate(per_pop =items/pop/(4+11/12) * 1000)
+
+
+primary_care %>%
+  group_by(date, product) %>%
+  summarise(sum = sum(items)) %>%
+  group_by(product) %>%
+  mutate(first_val = first(sum),
+         items = sum/first_val) %>%
+
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365)  %>%
+  group_by(product) %>%
+  nest() %>%
+  mutate(res = map(data, .f = function(x)
+  {tidy(lm(items ~ months, data = x), conf.int = T)}
+  )) %>%
+  unnest(res) %>%
+  filter(term == "months") %>% 
+  ungroup() %>%
+      mutate(z = abs((estimate - -0.0424))/sqrt(0.00460 ^2 + std.error^2), z_p = pnorm(z, lower.tail = F)) %>%
+  mutate(estimate = estimate *100, conf.low = conf.low*100, conf.high = conf.high*100) %>%
+  select(product, term, estimate, conf.low, conf.high, p.value, z_p) %>%
+  arrange(estimate) %>%
+  mutate(across(is.numeric, signif, 2)) %>%
+  transmute(product, res = paste0(estimate, "% (", conf.low, "% ; ", conf.high, "%)"), p.value, z_p) %>%
+  gt::gt()
+
+
+
+
+```
+
+```{r}
+primary_care %>%
+  filter(product == "Quinolones") %>%
+  ungroup() %>%
+  ggplot(aes(x = date, y = items, colour = row_name)) +
+  geom_point(alpha = 0.05) +
+  geom_line(method = "lm", alpha = 0.4, stat = "smooth") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  xlab("") +
+  ylab("items/month")
+primary_care%>%
+  filter(product == "Quinolones") %>%
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365) %>%
+  # group_by(row_name) %>%
+    mutate(first_val = first(items),
+        items = items/first_val) %>%
+  group_by(row_name) %>%
+  nest() %>%
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(items ~ months, data = x), conf.int = T)}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months") %>%
+  
+  arrange(-estimate)  %>% mutate(estimate = estimate *100, conf.low = conf.low*100, conf.high = conf.high*100) %>%
+  ungroup() %>%
+  select(row_name,term, estimate, conf.low, conf.high, p.value) %>%
+  arrange(-estimate) %>%
+  mutate(across(is.numeric, signif, 2)) %>%
+  transmute(row_name, res = paste0(estimate, "% 95% CI (", conf.low, "% ; ", conf.high, "%)"), p.value) %>%
+  gt::gt()
+
+
+p5 <- primary_care %>%
+  filter(product == "Quinolones") %>%
+  ungroup() %>%
+  ggplot(aes(x = date, y = items, colour = row_name)) +
+  geom_point(alpha = 0.05) +
+  geom_line(method = "lm", alpha = 0.4, stat = "smooth") +
+  theme_bw() +
+  theme(legend.position = "none") +
+  xlab("") +
+  ylab("items/month")
+
+
+p6 <- primary_care%>%
+  filter(product == "Quinolones") %>%
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365) %>%
+  # group_by(row_name) %>%
+    mutate(first_val = first(items),
+        items = items/first_val) %>%
+  group_by(row_name) %>%
+  nest() %>%
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(items ~ months, data = x))}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months") %>%
+  arrange(-estimate) %>%
+  mutate(estimate = estimate * 100) %>%
+  ggplot(aes(x = estimate)) +
+  geom_histogram(binwidth = 2) +
+  geom_vline(aes(xintercept = 0), col = "black") +
+   geom_vline(aes(xintercept = -4.24), col = "red", lty = "dotted") +
+  
+  theme_bw() +
+  xlab("% change per year") +
+  ylab("")
+
+
+ primary_care%>%
+  filter(product == "Quinolones") %>%
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365) %>%
+  # group_by(row_name) %>%
+    mutate(first_val = first(items),
+        items = items/first_val) %>%
+  group_by(row_name) %>%
+  nest() %>%
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(items ~ months, data = x))}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months") %>%
+  arrange(-estimate) %>%
+   pull(estimate) %>%
+  quantile(0.2)
+
+p5/p6 + plot_annotation(tag_levels = "A")
+ggsave("plots/figure_2.pdf", height = 10, width = 8)
+```
+
+Secondary care
+
+```{r}
+
+
+secondary_care_overall <- secondary_care %>%
+  left_join(scale_factor) %>%
+  transmute(items = g/scale,
+  year = year(date), month = month(date), product, date)  %>%
+  mutate(care = "Secondary") %>%
+  filter(product %in% primary_care$product)
+
+
+
+primary_care %>%
+  group_by(date, product) %>%
+  summarise(items = sum(items)) %>% 
+  mutate(year = year(date), month = month(date)) %>%
+  filter(product %in% scale_factor$product) %>%
+  mutate(care = "Primary") %>%
+  bind_rows(secondary_care_overall) %>%
+  add_count(product) %>%
+  mutate(product = fct_reorder(product, n)) %>%
+  ggplot(aes(x = date, y = items, colour = care)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~product, scales = "free") +
+  theme_bw() +
+  xlab("") +
+  ylab("items/month") +
+  theme(legend.position = "bottom")
+
+
+
+
+ggsave("plots/figure_3.pdf", height = 12, width = 12)
+```
+
+Tables
+
+```{r}
+
+secondary_care %>%
+    left_join(scale_factor) %>%
+  transmute(items = g/scale,
+  year = year(date), month = month(date), product, date)  %>%
+  
+  # filter(product == "Quinolones") %>%
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365) %>%
+  # group_by(row_name) %>%
+    mutate(first_val = first(items),
+        items = items/first_val) %>%
+  group_by(product) %>%
+  nest() %>%
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(items ~ months, data = x), conf.int = T)}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months") %>%
+    mutate(z = abs((estimate - 3.22e-4))/sqrt(0.00256^2 + std.error^2), z_p = pnorm(z, lower.tail = F)) %>%
+      mutate(z_levo = (abs(estimate - 3.59e-3))/sqrt(0.000909^2 + std.error^2), z_p_levo = pnorm(z_levo, lower.tail = F)) %>%
+  arrange(-estimate)  %>% mutate(estimate = estimate *100, conf.low = conf.low*100, conf.high = conf.high*100) %>%
+  ungroup() %>%
+  select(product,term, estimate, conf.low, conf.high, p.value, z_p, z_p_levo) %>%
+  arrange(-estimate) %>%
+  mutate(across(is.numeric, signif, 2)) %>%
+  transmute(product, res = paste0(estimate, "% CI (", conf.low, "% ; ", conf.high, "%)"), p.value, z_p, z_p_levo) %>%
+  gt::gt()
+
+
+secondary_care %>%
+    left_join(scale_factor) %>%
+  transmute(items = g/scale,
+  year = year(date), month = month(date), product, date)  %>%
+  
+  # filter(product == "Quinolones") %>%
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365) %>%
+  # group_by(row_name) %>%
+    mutate(first_val = first(items),
+        items = items/first_val) %>%
+  group_by(product) %>%
+  nest() %>%
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(items ~ months, data = x), conf.int = T)}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months") 
+```
+
+Relatice to levo
+
+```{r}
+
+secondary_care %>%
+    left_join(scale_factor) %>%
+  transmute(items = g/scale,
+  year = year(date), month = month(date), product, date)  %>%
+  
+  # filter(product == "Quinolones") %>%
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365) %>%
+  # group_by(row_name) %>%
+    mutate(first_val = first(items),
+        items = items/first_val) %>%
+  group_by(product) %>%
+  nest() %>%
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(items ~ months, data = x), conf.int = T)}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months") %>%
+
+  arrange(-estimate)  %>% mutate(estimate = estimate *100, conf.low = conf.low*100, conf.high = conf.high*100) %>%
+  ungroup() %>%
+
+  select(product,term, estimate, conf.low, conf.high, p.value, z, z_p) %>%
+  arrange(-estimate) %>%
+  mutate(across(is.numeric, signif, 2)) %>%
+  transmute(product, res = paste0(estimate, "% 95% CI (", conf.low, "% ; ", conf.high, "%)"), p.value, z, z_p) %>%
+  gt::gt()
+ggsave("plots/figure_4.pdf", height = 12, width = 12)
+```
+
+Plot ratio:
+
+```{r}
+
+secondary_care %>%
+    left_join(scale_factor) %>%
+  transmute(items = g/scale,
+  year = year(date), month = month(date), product, date)  %>%
+  
+  # filter(product == "Quinolones") %>%
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365) %>%
+  # group_by(row_name) %>%
+  mutate(first = if_else(product == "Ciprofloxacin",0,1)) %>%
+  arrange(date, first) %>%
+  group_by(date) %>%
+  mutate(ratio = items / first(items)) %>%
+  ungroup() %>%
+  group_by(product) %>%
+  nest() %>%
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(ratio ~ months, data = x), conf.int = T)}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months") 
+
+
+
+secondary_care %>%
+    left_join(scale_factor) %>%
+  transmute(items = g/scale,
+  year = year(date), month = month(date), product, date)  %>%
+  
+  # filter(product == "Quinolones") %>%
+  mutate(months = difftime(date, ymd("2018-12-01"), units = "days" )/365) %>%
+  # group_by(row_name) %>%
+  mutate(first = if_else(product == "Ciprofloxacin",0,1)) %>%
+  arrange(date, first) %>%
+  group_by(date) %>%
+  mutate(ratio = items / first(items)) %>%
+  filter(product != "Ciprofloxacin") %>%
+  ungroup() %>%
+  ggplot(aes(x = date, y = ratio)) +
+           geom_point() +
+  geom_smooth(method = "lm") +
+  theme_bw() +
+  facet_wrap(~product, scales = "free") +
+  ylab("Ratio of prescriptions relative to ciprofloxacin") +
+  xlab("")
+
+
+```
+
+Sensitivity analyses adjusted for bed utilisation.
+
+```{r}
+
+bed_utilisation %>%
+  mutate(date = dmy(paste0("1 ", date))) %>%
+  ggplot(aes(x = date, y = utilisation)) +
+  geom_point() +
+  geom_smooth() +
+  theme_bw() +
+  xlab("") +
+  ylab("Bed utilisation in NHS Trusts in England")
+
+ggsave("plots/figure_S1.pdf", height = 8, width = 10)
+tail(bed_utilisation)
+
+
+bed_utilisation %>%
+  mutate(date = dmy(paste0("1 ", date))) %>%
+  right_join(secondary_care) %>%
+  mutate(g = g/utilisation)  %>%
+  left_join(scale_factor) %>%
+  mutate(items = g/scale) %>%
+  filter(date > ymd("2020-11-01")) %>%
+  ggplot(aes(x = date, y = items)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  facet_wrap(~product, scales = "free") +
+  theme_bw() +
+  xlab("") +
+  ylab("items/month/per inpatient") +
+  theme(legend.position = "bottom")
+
+ggsave("plots/figure_5.pdf", height = 12, width = 12)
+
+bed_utilisation %>%
+  mutate(date = dmy(paste0("1 ", date))) %>%
+  left_join(secondary_care) %>%
+  filter(product == "Ciprofloxacin" | product == "Levofloxacin") %>%
+    mutate(g = g/utilisation/5) %>%
+  group_by(date) %>%
+
+
+  summarise(g = sum(g)) %>% mutate(product = "Levofloxacin + Ciprofloxacin") %>%
+  mutate(months = difftime(date, ymd("2020-12-01"), units = "days" )/365) %>%
+   group_by(product) %>%
+  # group_by(row_name) %>%
+    mutate(first_val = first(g),
+        items = g/first_val) %>%
+ 
+  nest() %>% 
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(items ~ months, data = x), conf.int = T)}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months")
+  
+
+bed_utilisation %>%
+  mutate(date = dmy(paste0("1 ", date))) %>%
+  right_join(secondary_care) %>%
+  mutate(g = g/utilisation)  %>%
+  left_join(scale_factor) %>%
+  mutate(items = g/scale) %>%
+  filter(date > ymd("2020-11-01")) %>%
+  mutate(months = difftime(date, ymd("2020-12-01"), units = "days" )/365) %>%
+   group_by(product) %>%
+  # group_by(row_name) %>%
+    mutate(first_val = first(items),
+        items = items/first_val) %>%
+  filter(product == "Ciprofloxacin")
+ 
+  nest() %>% 
+  mutate(res = map(data, .f = function(x)
+                   {tidy(lm(items ~ months, data = x), conf.int = T)}
+                   )) %>%
+  unnest(res) %>%
+  filter(term == "months") %>%
+
+  arrange(-estimate)  %>% mutate(estimate = estimate *100, conf.low = conf.low*100, conf.high = conf.high*100) %>%
+  ungroup() %>%
+
+  select(product,term, estimate, conf.low, conf.high, p.value) %>%
+  arrange(-estimate) %>%
+  mutate(across(is.numeric, signif, 2)) %>%
+  transmute(product, res = paste0(estimate, "% 95% CI (", conf.low, "% ; ", conf.high, "%)"), p.value) %>%
+  gt::gt()
+
+
+secondary_care%>%
+  left_join(scale_factor) %>%
+  filter(product == "Ciprofloxacin") %>%
+  mutate(items = g/scale) %>%
+  mutate(months = difftime(date, ymd("2020-12-01"), units = "days" )/365) %>%
+    mutate(first_val = first(items),
+        items = items/first_val) %>%
+  view()
+
+```
